@@ -110,7 +110,7 @@ def append_by_headers(df, worksheet):
         for gs_header in sheet_headers:
             gs_key = clean(gs_header)
 
-            excel_header = COLUMN_ALIASES.get(gs_key, gs_header)
+            excel_header = COLUMN_ALIASES.get(gs_header, gs_header)
 
             excel_key = clean(excel_header)
 
