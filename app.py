@@ -1,162 +1,121 @@
 import streamlit as st
 import pandas as pd
 import gspread
-
 from google.oauth2.service_account import Credentials
 
-st.set_page_config(page_title="Monthly KPI Upload")
+# =========================
+# CONFIG
+# =========================
 
-st.title("Monthly KPI Upload")
+GOOGLE_SHEET_URL = "https://docs.google.com/spreadsheets/d/1EWT1qzyyutsfclz9RK_lcjJRqi6W9dodTBpXEQUPN1E/edit?gid=0#gid=0"
 
-# -----------------------
-# GOOGLE SHEETS AUTH
-# -----------------------
+RAW_TAB = "Raw data"
+STATS_TAB = "Raw data Stats"
 
-scope = [
-    "https://www.googleapis.com/auth/spreadsheets"
+SCOPES = [
+    "https://www.googleapis.com/auth/spreadsheets",
+    "https://www.googleapis.com/auth/drive",
 ]
+
+# =========================
+# GOOGLE AUTH
+# =========================
 
 creds = Credentials.from_service_account_info(
     st.secrets["gcp_service_account"],
-    scopes=scope
+    scopes=SCOPES,
 )
 
 client = gspread.authorize(creds)
 
-sheet = client.open("Model KPI dashboard")
+spreadsheet = client.open_by_url(GOOGLE_SHEET_URL)
 
-raw_ws = sheet.worksheet("Raw_Data")
-stats_ws = sheet.worksheet("Raw_Data_Stats")
+raw_ws = spreadsheet.worksheet(RAW_TAB)
+stats_ws = spreadsheet.worksheet(STATS_TAB)
 
-# -----------------------
-# HELPERS
-# -----------------------
+# =========================
+# UI
+# =========================
 
-def clean_money(v):
-    if pd.isna(v):
-        return ""
+st.title("KPI Dashboard Upload")
 
-    return (
-        str(v)
-        .replace("$", "")
-        .replace(",", "")
-    )
-
-
-def clear_below_header(ws):
-    rows = ws.row_count
-    cols = ws.col_count
-
-    ws.batch_clear([
-        f"A2:{gspread.utils.rowcol_to_a1(rows, cols)}"
-    ])
-
-
-def upload_dataframe(ws, df):
-
-    clear_below_header(ws)
-
-    values = df.fillna("").values.tolist()
-
-    if values:
-        ws.update(
-            f"A2",
-            values
-        )
-
-
-# -----------------------
-# FILE UPLOAD
-# -----------------------
-
-uploaded = st.file_uploader(
+uploaded_file = st.file_uploader(
     "Upload monthly Excel file",
-    type=["xlsx"]
+    type=["xlsx"],
 )
 
-if uploaded:
+# =========================
+# HELPERS
+# =========================
 
-    # ==========================
-    # SHEET 1: Creator Statistics
-    # ==========================
 
-    stats1 = pd.read_excel(
-        uploaded,
-        sheet_name="Creator Statistics"
-    )
+def append_by_headers(df, worksheet):
+    """
+    Match dataframe columns to existing Google Sheet headers.
+    Append rows.
+    """
 
-    date_col_1 = stats1.columns[0]
+    headers = worksheet.row_values(1)
 
-    mapped_1 = pd.DataFrame({
-        "Date Range": stats1[date_col_1],
-        "Creator": stats1["Creator"],
-        "Subscription Gross": stats1["Subscription Gross"].apply(clean_money),
-        "New subscriptions Gross": stats1["New subscriptions Gross"].apply(clean_money),
-        "Recurring subscriptions Gross": stats1["Recurring subscriptions Gross"].apply(clean_money),
-        "Tips Gross": stats1["Tips Gross"].apply(clean_money),
-        "Total earnings Gross": stats1["Total earnings Gross"].apply(clean_money),
-        "Contribution %": stats1["Contribution %"],
-        "OF ranking": stats1["OF ranking"],
-        "Following": stats1["Following"],
-        "Fans with renew on": stats1["Fans with renew on"],
-        "Renew on %": stats1["Renew on %"],
-        "New fans": stats1["New fans"],
-        "Active fans": stats1["Active fans"],
-        "Change in expired fan count": stats1["Change in expired fan count"],
-        "Message Gross": stats1["Message Gross"].apply(clean_money),
-        "Creator group": stats1["Creator group"],
-        "Avg spend per spender Gross": stats1["Avg spend per spender Gross"].apply(clean_money),
-        "Avg spend per transaction Gross": stats1["Avg spend per transaction Gross"].apply(clean_money),
-        "Avg earnings per fan Gross": stats1["Avg earnings per fan Gross"].apply(clean_money),
-        "Avg subscription length": stats1["Avg subscription length"],
-    })
+    # Build empty rows using Google Sheet column order
+    rows_to_add = []
 
-    # ==========================
-    # SHEET 2: Creator Statistics Detail
-    # ==========================
+    for _, row in df.iterrows():
+        output_row = []
 
-    stats2 = pd.read_excel(
-        uploaded,
-        sheet_name="Creator Statistics Detail"
-    )
+        for header in headers:
+            if header in df.columns:
+                value = row[header]
+            else:
+                value = ""
 
-    date_col_2 = stats2.columns[0]
+            if pd.isna(value):
+                value = ""
 
-    mapped_2 = stats2.copy()
+            output_row.append(value)
 
-    mapped_2.rename(
-        columns={
-            date_col_2: "Date Range"
-        },
-        inplace=True
-    )
+        rows_to_add.append(output_row)
 
-    # ==========================
-    # PREVIEW
-    # ==========================
-
-    st.subheader("Raw_Data preview")
-    st.dataframe(mapped_1.head())
-
-    st.subheader("Raw_Data_Stats preview")
-    st.dataframe(mapped_2.head())
-
-    # ==========================
-    # UPLOAD BUTTON
-    # ==========================
-
-    if st.button("Upload to Google Sheets"):
-
-        upload_dataframe(
-            raw_ws,
-            mapped_1
+    if rows_to_add:
+        worksheet.append_rows(
+            rows_to_add,
+            value_input_option="USER_ENTERED",
         )
 
-        upload_dataframe(
-            stats_ws,
-            mapped_2
+
+# =========================
+# PROCESS FILE
+# =========================
+
+if uploaded_file:
+
+    try:
+        excel = pd.ExcelFile(uploaded_file)
+
+        sheet_names = excel.sheet_names
+
+        if len(sheet_names) < 2:
+            st.error("Excel file must contain at least 2 sheets")
+            st.stop()
+
+        # first sheet
+        df_raw = pd.read_excel(
+            uploaded_file,
+            sheet_name=sheet_names[0],
         )
 
-        st.success(
-            "Uploaded successfully"
+        # second sheet
+        df_stats = pd.read_excel(
+            uploaded_file,
+            sheet_name=sheet_names[1],
         )
+
+        # append data
+        append_by_headers(df_raw, raw_ws)
+        append_by_headers(df_stats, stats_ws)
+
+        st.success("Upload completed successfully")
+
+    except Exception as e:
+        st.error(f"Error: {e}")
+        raise
