@@ -3,11 +3,11 @@ import pandas as pd
 import gspread
 from google.oauth2.service_account import Credentials
 
-# =========================
+# ==========================================
 # CONFIG
-# =========================
+# ==========================================
 
-GOOGLE_SHEET_URL = "https://docs.google.com/spreadsheets/d/1EWT1qzyyutsfclz9RK_lcjJRqi6W9dodTBpXEQUPN1E/edit?gid=1445258276#gid=1445258276"
+GOOGLE_SHEET_URL = "https://docs.google.com/spreadsheets/d/1EWT1qzyyutsfclz9RK_lcjJRqi6W9dodTBpXEQUPN1E/edit?gid=1111412918#gid=1111412918"
 
 TARGET_TAB = "Raw data Stats"
 
@@ -16,9 +16,9 @@ SCOPES = [
     "https://www.googleapis.com/auth/drive",
 ]
 
-# =========================
+# ==========================================
 # GOOGLE AUTH
-# =========================
+# ==========================================
 
 creds = Credentials.from_service_account_info(
     st.secrets["gcp_service_account"],
@@ -27,134 +27,194 @@ creds = Credentials.from_service_account_info(
 
 client = gspread.authorize(creds)
 
-spreadsheet = client.open_by_url(GOOGLE_SHEET_URL)
+spreadsheet = client.open_by_url(
+    GOOGLE_SHEET_URL
+)
 
-target_ws = spreadsheet.worksheet(TARGET_TAB)
+worksheet = spreadsheet.worksheet(
+    TARGET_TAB
+)
 
-# =========================
+# ==========================================
 # UI
-# =========================
+# ==========================================
 
-st.title("Daily KPI Upload")
+st.title("KPI Daily Raw Data Upload")
 
 uploaded_file = st.file_uploader(
-    "Upload monthly Excel file",
+    "Upload Excel file",
     type=["xlsx"],
 )
 
-# =========================
+# ==========================================
 # HELPERS
-# =========================
+# ==========================================
 
-def normalize_date(value):
+def normalize_value(value):
     """
-    Converts date to comparable string.
+    Make values comparable
+    between Excel + Google Sheets.
     """
+
     if pd.isna(value):
         return ""
 
-    try:
-        return pd.to_datetime(value).strftime("%Y-%m-%d")
-    except:
-        return str(value).strip()
+    # Date / datetime
+    if isinstance(value, pd.Timestamp):
+        return value.strftime("%Y-%m-%d")
+
+    # Numbers
+    if isinstance(value, float):
+        if value.is_integer():
+            return str(int(value))
+        return str(value)
+
+    return str(value).strip()
 
 
-def get_existing_dates(worksheet):
+def get_existing_rows(ws):
     """
-    Reads existing dates from Google Sheet column A.
-    Header stays ignored.
+    Read Google Sheet rows
+    excluding header.
     """
 
-    values = worksheet.col_values(1)
+    values = ws.get_all_values()
 
     if len(values) <= 1:
         return set()
 
-    dates = set()
+    existing = set()
 
-    for value in values[1:]:
-        dates.add(normalize_date(value))
+    for row in values[1:]:
 
-    return dates
+        normalized_row = tuple(
+            normalize_value(v)
+            for v in row
+        )
+
+        existing.add(normalized_row)
+
+    return existing
 
 
-def append_missing_rows(df, worksheet):
+def build_output_row(
+    row,
+    google_col_count,
+):
     """
-    Append only rows whose Date Range
-    does not already exist.
+    Match Excel columns
+    to Google columns by index.
     """
 
-    # Google header row
-    sheet_headers = worksheet.row_values(1)
-    num_cols = len(sheet_headers)
+    output = []
 
-    # Existing dates
-    existing_dates = get_existing_dates(worksheet)
+    for i in range(
+        google_col_count
+    ):
+
+        if i < len(row):
+            value = row.iloc[i]
+        else:
+            value = ""
+
+        if pd.isna(value):
+            value = ""
+
+        output.append(value)
+
+    return output
+
+
+def append_missing_rows(
+    df,
+    ws,
+):
+    """
+    Append only rows
+    not already present.
+    """
+
+    headers = ws.row_values(1)
+
+    google_col_count = len(headers)
+
+    existing_rows = get_existing_rows(
+        ws
+    )
 
     rows_to_add = []
 
     for _, row in df.iterrows():
 
-        row_date = normalize_date(row.iloc[0])
+        output_row = build_output_row(
+            row,
+            google_col_count,
+        )
 
-        # Skip duplicate dates
-        if row_date in existing_dates:
+        normalized_row = tuple(
+            normalize_value(v)
+            for v in output_row
+        )
+
+        if normalized_row in existing_rows:
             continue
 
-        output_row = []
+        rows_to_add.append(
+            output_row
+        )
 
-        for i in range(num_cols):
-
-            if i < len(df.columns):
-                value = row.iloc[i]
-            else:
-                value = ""
-
-            if pd.isna(value):
-                value = ""
-
-            output_row.append(value)
-
-        rows_to_add.append(output_row)
+        existing_rows.add(
+            normalized_row
+        )
 
     if rows_to_add:
-        worksheet.append_rows(
+        ws.append_rows(
             rows_to_add,
             value_input_option="USER_ENTERED",
         )
 
     return len(rows_to_add)
 
-# =========================
+# ==========================================
 # PROCESS FILE
-# =========================
+# ==========================================
 
 if uploaded_file:
 
     try:
-        excel = pd.ExcelFile(uploaded_file)
 
-        sheet_names = excel.sheet_names
+        excel = pd.ExcelFile(
+            uploaded_file
+        )
+
+        sheet_names = (
+            excel.sheet_names
+        )
 
         if len(sheet_names) < 2:
-            st.error("Excel must contain at least 2 sheets")
+            st.error(
+                "Excel file must contain at least 2 sheets"
+            )
             st.stop()
 
-        # Read SECOND sheet from Excel
+        # Read SECOND Excel tab only
         df = pd.read_excel(
             uploaded_file,
             sheet_name=sheet_names[1],
         )
 
+        # Append only new rows
         added_count = append_missing_rows(
             df,
-            target_ws,
+            worksheet,
         )
 
         st.success(
-            f"Upload completed. Added {added_count} new rows."
+            f"Upload complete. Added {added_count} new rows."
         )
 
     except Exception as e:
-        st.error(f"Error: {e}")
+        st.error(
+            f"Error: {e}"
+        )
         raise
