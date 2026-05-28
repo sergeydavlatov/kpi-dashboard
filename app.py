@@ -3,6 +3,10 @@ import pandas as pd
 import gspread
 from google.oauth2.service_account import Credentials
 
+# =========================
+# CONFIG
+# =========================
+
 GOOGLE_SHEET_URL = "https://docs.google.com/spreadsheets/d/1EWT1qzyyutsfclz9RK_lcjJRqi6W9dodTBpXEQUPN1E/edit?gid=0#gid=0"
 
 RAW_TAB = "Raw data"
@@ -14,56 +18,7 @@ SCOPES = [
 ]
 
 # =========================
-# HEADER MAPPING
-# left = Google Sheet header
-# right = Excel header
-# =========================
-
-COLUMN_ALIASES = {
-    "Date Range": "Date/Time Africa/Monrovia",
-
-    "Creator": "Creator",
-
-    "Subscription Gross": "Subscription Gross",
-
-    "New Subscription Gross": "New subscriptions Gross",
-
-    "Recurring Subscription Gross": "Recurring subscriptions Gross",
-
-    "Tips Gross": "Tips Gross",
-
-    "Total Earnings Gross": "Total earnings Gross",
-
-    "Contribution %": "Contribution %",
-
-    "OF Ranking": "OF ranking",
-
-    "Followings": "Following",
-
-    "Fans With Renew On": "Fans with renew on",
-
-    "Renew On %": "Renew on %",
-
-    "New Fans": "New fans",
-
-    "Active Fans": "Active fans",
-
-    "Change In Expired Fan Count": "Change in expired fan count",
-
-    "Message Gross": "Message Gross",
-
-    "Creator Group": "Creator group",
-
-    "Avg Spend Per Spender Gross": "Avg spend per spender Gross",
-
-    "Avg Spend Per Transaction Gross": "Avg spend per transaction Gross",
-
-    "Avg Earnings Gross Per Fan Gross": "Avg earnings per fan Gross",
-
-    "Avg Subscription Length": "Avg subscription length",
-}
-# =========================
-# AUTH
+# GOOGLE AUTH
 # =========================
 
 creds = Credentials.from_service_account_info(
@@ -78,6 +33,10 @@ spreadsheet = client.open_by_url(GOOGLE_SHEET_URL)
 raw_ws = spreadsheet.worksheet(RAW_TAB)
 stats_ws = spreadsheet.worksheet(STATS_TAB)
 
+# =========================
+# UI
+# =========================
+
 st.title("KPI Dashboard Upload")
 
 uploaded_file = st.file_uploader(
@@ -90,32 +49,25 @@ uploaded_file = st.file_uploader(
 # =========================
 
 
-def clean(text):
-    return str(text).strip().lower()
+def append_by_index(df, worksheet):
+    """
+    Push values by column position:
+    Excel col A -> Google col A
+    Excel col B -> Google col B
+    """
 
-
-def append_by_headers(df, worksheet):
+    # number of columns based on Google Sheet header row
     sheet_headers = worksheet.row_values(1)
-
-    df_map = {
-        clean(col): col
-        for col in df.columns
-    }
+    num_cols = len(sheet_headers)
 
     rows_to_add = []
 
     for _, row in df.iterrows():
         output_row = []
 
-        for gs_header in sheet_headers:
-            gs_key = clean(gs_header)
-
-            excel_header = COLUMN_ALIASES.get(gs_header, gs_header)
-
-            excel_key = clean(excel_header)
-
-            if excel_key in df_map:
-                value = row[df_map[excel_key]]
+        for i in range(num_cols):
+            if i < len(df.columns):
+                value = row.iloc[i]
             else:
                 value = ""
 
@@ -132,27 +84,36 @@ def append_by_headers(df, worksheet):
             value_input_option="USER_ENTERED",
         )
 
-
 # =========================
-# PROCESS
+# PROCESS FILE
 # =========================
 
 if uploaded_file:
+
     try:
         excel = pd.ExcelFile(uploaded_file)
 
+        sheet_names = excel.sheet_names
+
+        if len(sheet_names) < 2:
+            st.error("Excel file must contain at least 2 sheets")
+            st.stop()
+
+        # first tab
         df_raw = pd.read_excel(
             uploaded_file,
-            sheet_name=excel.sheet_names[0],
+            sheet_name=sheet_names[0],
         )
 
+        # second tab
         df_stats = pd.read_excel(
             uploaded_file,
-            sheet_name=excel.sheet_names[1],
+            sheet_name=sheet_names[1],
         )
 
-        append_by_headers(df_raw, raw_ws)
-        append_by_headers(df_stats, stats_ws)
+        # push by index
+        append_by_index(df_raw, raw_ws)
+        append_by_index(df_stats, stats_ws)
 
         st.success("Upload completed successfully")
 
