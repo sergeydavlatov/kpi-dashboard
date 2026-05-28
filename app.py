@@ -20,27 +20,34 @@ SCOPES = [
 # =========================
 
 COLUMN_ALIASES = {
-    "date range": "Date/Time Africa/Monrovia",
-    "creator": "Creator",
-    "subscription gross": "Subscription Gross",
-    "new subscriptions gross": "New subscriptions Gross",
-    "recurring subscriptions gross": "Recurring subscriptions Gross",
-    "tips gross": "Tips Gross",
-    "total earnings gross": "Total earnings Gross",
-    "contribution %": "Contribution %",
-    "of ranking": "OF ranking",
-    "following": "Following",
-    "fans with renew on": "Fans with renew on",
-    "renew on %": "Renew on %",
-    "new fans": "New fans",
-    "active fans": "Active fans",
-    "change in expired fan count": "Change in expired fan count",
-    "message gross": "Message Gross",
-    "creator group": "Creator group",
-    "avg spend per spender gross": "Avg spend per spender Gross",
-    "avg spend per transaction gross": "Avg spend per transaction Gross",
-    "avg earnings per fan gross": "Avg earnings per fan Gross",
-    "avg subscription length": "Avg subscription length",
+    "Date range": "Date/Time Africa/Monrovia",
+
+    "Creator": "Creator",
+
+    "Subscription gross": "Subscription Gross",
+
+    "New subscription gross": "New subscriptions Gross",
+
+    "Recurring subscription gross": "Recurring subscriptions Gross",
+
+    "Tips gross": "Tips Gross",
+
+    "Total earnings gross": "Total earnings Gross",
+
+    "Followings": "Following",
+
+    "Message gross": "Message Gross",
+
+    "Creator group": "Creator group",
+
+    "Avg spend per spender gross": "Avg spend per spender Gross",
+
+    "Avg spend per transaction gross": "Avg spend per transaction Gross",
+
+    "Avg earnings gross per fan gross": "Avg earnings per fan Gross",
+
+    "Avg subscription length": "Avg subscription length",
+}
 }
 
 # =========================
