@@ -3,10 +3,6 @@ import pandas as pd
 import gspread
 from google.oauth2.service_account import Credentials
 
-# =========================
-# CONFIG
-# =========================
-
 GOOGLE_SHEET_URL = "https://docs.google.com/spreadsheets/d/1EWT1qzyyutsfclz9RK_lcjJRqi6W9dodTBpXEQUPN1E/edit?gid=0#gid=0"
 
 RAW_TAB = "Raw data"
@@ -18,7 +14,37 @@ SCOPES = [
 ]
 
 # =========================
-# GOOGLE AUTH
+# HEADER MAPPING
+# left = Google Sheet header
+# right = Excel header
+# =========================
+
+COLUMN_ALIASES = {
+    "date range": "Date/Time Africa/Monrovia",
+    "creator": "Creator",
+    "subscription gross": "Subscription Gross",
+    "new subscriptions gross": "New subscriptions Gross",
+    "recurring subscriptions gross": "Recurring subscriptions Gross",
+    "tips gross": "Tips Gross",
+    "total earnings gross": "Total earnings Gross",
+    "contribution %": "Contribution %",
+    "of ranking": "OF ranking",
+    "following": "Following",
+    "fans with renew on": "Fans with renew on",
+    "renew on %": "Renew on %",
+    "new fans": "New fans",
+    "active fans": "Active fans",
+    "change in expired fan count": "Change in expired fan count",
+    "message gross": "Message Gross",
+    "creator group": "Creator group",
+    "avg spend per spender gross": "Avg spend per spender Gross",
+    "avg spend per transaction gross": "Avg spend per transaction Gross",
+    "avg earnings per fan gross": "Avg earnings per fan Gross",
+    "avg subscription length": "Avg subscription length",
+}
+
+# =========================
+# AUTH
 # =========================
 
 creds = Credentials.from_service_account_info(
@@ -33,10 +59,6 @@ spreadsheet = client.open_by_url(GOOGLE_SHEET_URL)
 raw_ws = spreadsheet.worksheet(RAW_TAB)
 stats_ws = spreadsheet.worksheet(STATS_TAB)
 
-# =========================
-# UI
-# =========================
-
 st.title("KPI Dashboard Upload")
 
 uploaded_file = st.file_uploader(
@@ -49,23 +71,32 @@ uploaded_file = st.file_uploader(
 # =========================
 
 
+def clean(text):
+    return str(text).strip().lower()
+
+
 def append_by_headers(df, worksheet):
-    """
-    Match dataframe columns to existing Google Sheet headers.
-    Append rows.
-    """
+    sheet_headers = worksheet.row_values(1)
 
-    headers = worksheet.row_values(1)
+    df_map = {
+        clean(col): col
+        for col in df.columns
+    }
 
-    # Build empty rows using Google Sheet column order
     rows_to_add = []
 
     for _, row in df.iterrows():
         output_row = []
 
-        for header in headers:
-            if header in df.columns:
-                value = row[header]
+        for gs_header in sheet_headers:
+            gs_key = clean(gs_header)
+
+            excel_header = COLUMN_ALIASES.get(gs_key, gs_header)
+
+            excel_key = clean(excel_header)
+
+            if excel_key in df_map:
+                value = row[df_map[excel_key]]
             else:
                 value = ""
 
@@ -84,33 +115,23 @@ def append_by_headers(df, worksheet):
 
 
 # =========================
-# PROCESS FILE
+# PROCESS
 # =========================
 
 if uploaded_file:
-
     try:
         excel = pd.ExcelFile(uploaded_file)
 
-        sheet_names = excel.sheet_names
-
-        if len(sheet_names) < 2:
-            st.error("Excel file must contain at least 2 sheets")
-            st.stop()
-
-        # first sheet
         df_raw = pd.read_excel(
             uploaded_file,
-            sheet_name=sheet_names[0],
+            sheet_name=excel.sheet_names[0],
         )
 
-        # second sheet
         df_stats = pd.read_excel(
             uploaded_file,
-            sheet_name=sheet_names[1],
+            sheet_name=excel.sheet_names[1],
         )
 
-        # append data
         append_by_headers(df_raw, raw_ws)
         append_by_headers(df_stats, stats_ws)
 
