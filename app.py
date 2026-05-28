@@ -23,7 +23,7 @@ creds = Credentials.from_service_account_info(
 
 client = gspread.authorize(creds)
 
-sheet = client.open("KPI Dashboard")
+sheet = client.open("Model KPI dashboard")
 
 raw_ws = sheet.worksheet("Raw_Data")
 stats_ws = sheet.worksheet("Raw_Data_Stats")
