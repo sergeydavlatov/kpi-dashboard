@@ -20,7 +20,6 @@ SCOPES = [
 # =========================
 
 COLUMN_ALIASES = {
-    COLUMN_ALIASES = {
     "Date Range": "Date/Time Africa/Monrovia",
 
     "Creator": "Creator",
@@ -63,7 +62,6 @@ COLUMN_ALIASES = {
 
     "Avg Subscription Length": "Avg subscription length",
 }
-
 # =========================
 # AUTH
 # =========================
