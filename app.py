@@ -7,7 +7,7 @@ from google.oauth2.service_account import Credentials
 # CONFIG
 # =========================
 
-GOOGLE_SHEET_URL = "https://docs.google.com/spreadsheets/d/1EWT1qzyyutsfclz9RK_lcjJRqi6W9dodTBpXEQUPN1E/edit?gid=0#gid=0"
+GOOGLE_SHEET_URL = "https://docs.google.com/spreadsheets/d/1EWT1qzyyutsfclz9RK_lcjJRqi6W9dodTBpXEQUPN1E/edit?gid=1111412918#gid=1111412918"
 
 RAW_TAB = "Raw data"
 STATS_TAB = "Raw data Stats"
@@ -48,15 +48,24 @@ uploaded_file = st.file_uploader(
 # HELPERS
 # =========================
 
+def clear_sheet_data(worksheet):
+    """
+    Clears all rows except row 1 (headers).
+    """
+
+    all_values = worksheet.get_all_values()
+
+    if len(all_values) > 1:
+        worksheet.batch_clear(["A2:ZZ100000"])
+
 
 def append_by_index(df, worksheet):
     """
-    Push values by column position:
+    Push data by column order:
     Excel col A -> Google col A
     Excel col B -> Google col B
     """
 
-    # number of columns based on Google Sheet header row
     sheet_headers = worksheet.row_values(1)
     num_cols = len(sheet_headers)
 
@@ -99,19 +108,23 @@ if uploaded_file:
             st.error("Excel file must contain at least 2 sheets")
             st.stop()
 
-        # first tab
+        # Read tab 1
         df_raw = pd.read_excel(
             uploaded_file,
             sheet_name=sheet_names[0],
         )
 
-        # second tab
+        # Read tab 2
         df_stats = pd.read_excel(
             uploaded_file,
             sheet_name=sheet_names[1],
         )
 
-        # push by index
+        # Clear previous data
+        clear_sheet_data(raw_ws)
+        clear_sheet_data(stats_ws)
+
+        # Push fresh data
         append_by_index(df_raw, raw_ws)
         append_by_index(df_stats, stats_ws)
 
