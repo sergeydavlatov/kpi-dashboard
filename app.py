@@ -48,7 +48,6 @@ COLUMN_ALIASES = {
 
     "Avg subscription length": "Avg subscription length",
 }
-}
 
 # =========================
 # AUTH
