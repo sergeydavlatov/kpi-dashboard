@@ -2,6 +2,7 @@ import streamlit as st
 import pandas as pd
 import gspread
 import hashlib
+import time
 from google.oauth2.service_account import Credentials
 
 # ==========================================
@@ -17,10 +18,6 @@ SCOPES = [
     "https://www.googleapis.com/auth/drive",
 ]
 
-# How many rows to fetch from the END of the sheet for dedup comparison.
-# 365 days x 20 creators x 4 rows max = 29,200 — use 30,000 to be safe.
-LOOKBACK_ROWS = 30000
-
 # ==========================================
 # GOOGLE AUTH
 # ==========================================
@@ -31,9 +28,7 @@ creds = Credentials.from_service_account_info(
 )
 
 client = gspread.authorize(creds)
-
 spreadsheet = client.open_by_url(GOOGLE_SHEET_URL)
-
 worksheet = spreadsheet.worksheet(TARGET_TAB)
 
 # ==========================================
@@ -50,6 +45,19 @@ uploaded_file = st.file_uploader(
 # ==========================================
 # HELPERS
 # ==========================================
+
+def fetch_with_retry(fn, retries=5, delay=10):
+    """Call a gspread function, retrying on 503."""
+    for attempt in range(retries):
+        try:
+            return fn()
+        except gspread.exceptions.APIError as e:
+            if "503" in str(e) and attempt < retries - 1:
+                st.write(f"⚠️ Google API unavailable, retrying in {delay}s... (attempt {attempt + 1}/{retries})")
+                time.sleep(delay)
+            else:
+                raise
+
 
 def normalize_value(value):
     if pd.isna(value):
@@ -70,37 +78,26 @@ def hash_row(normalized_tuple):
 
 def get_existing_hashes(ws):
     """
-    Fetch only the last LOOKBACK_ROWS rows from Google Sheet.
-    No need to scan older rows — upload file covers max 365 days.
+    Single API call to fetch all existing rows,
+    returned as a set of hashes.
     """
-    st.write("⏳ Reading recent rows from Google Sheet...")
+    st.write("⏳ Reading existing rows from Google Sheet...")
 
-    try:
-        total_rows = len(ws.col_values(1))  # Fast — only fetches column A
-        st.write(f"📊 Google Sheet has **{total_rows}** total rows (including header).")
+    values = fetch_with_retry(lambda: ws.get_all_values())
 
-        if total_rows <= 1:
-            st.write("ℹ️ Sheet is empty — all rows will be added.")
-            return set()
+    if not values or len(values) <= 1:
+        st.write("ℹ️ Sheet is empty — all rows will be added.")
+        return set(), len(values[0]) if values else 0
 
-        # Calculate start row — fetch last LOOKBACK_ROWS rows only
-        start_row = max(2, total_rows - LOOKBACK_ROWS + 1)
-        range_notation = f"A{start_row}:U{total_rows}"
-
-        st.write(f"🔍 Fetching rows {start_row} to {total_rows} for comparison...")
-        rows = ws.get(range_notation)
-
-    except Exception as e:
-        st.error(f"Failed to read Google Sheet: {e}")
-        raise
+    headers = values[0]
+    st.write(f"✅ Sheet has **{len(values) - 1}** existing rows, **{len(headers)}** columns.")
 
     existing_hashes = set()
-    for row in rows:
+    for row in values[1:]:
         normalized = tuple(v.strip().lower() for v in row)
         existing_hashes.add(hash_row(normalized))
 
-    st.write(f"✅ Loaded **{len(existing_hashes)}** existing row hashes for comparison.")
-    return existing_hashes
+    return existing_hashes, len(headers)
 
 
 def build_output_row(row, google_col_count):
@@ -119,11 +116,7 @@ def build_output_row(row, google_col_count):
 
 
 def append_missing_rows(df, ws):
-    headers = ws.row_values(1)
-    st.write(f"📋 Google Sheet columns ({len(headers)}): `{headers}`")
-    google_col_count = len(headers)
-
-    existing_hashes = get_existing_hashes(ws)
+    existing_hashes, google_col_count = get_existing_hashes(ws)
 
     rows_to_add = []
 
@@ -148,16 +141,11 @@ def append_missing_rows(df, ws):
             batch = rows_to_add[i:i + batch_size]
             batch_num = (i // batch_size) + 1
             st.write(f"⏳ Pushing batch {batch_num}/{total_batches} ({len(batch)} rows)...")
-            try:
-                ws.append_rows(
-                    batch,
-                    value_input_option="USER_ENTERED",
-                )
-            except Exception as e:
-                st.error(f"Failed on batch {batch_num}: {e}")
-                raise
 
-        st.write("✅ All batches pushed successfully.")
+            fetch_with_retry(lambda b=batch: ws.append_rows(
+                b,
+                value_input_option="USER_ENTERED",
+            ))
 
     return len(rows_to_add)
 
@@ -170,12 +158,12 @@ if uploaded_file:
     try:
         excel = pd.ExcelFile(uploaded_file)
         sheet_names = excel.sheet_names
-        st.write(f"📄 Sheets found: `{sheet_names}`")
-        st.write(f"📄 Reading sheet: `{sheet_names[1]}`")
 
         if len(sheet_names) < 2:
             st.error("Excel file must contain at least 2 sheets.")
             st.stop()
+
+        st.write(f"📄 Reading sheet: `{sheet_names[1]}`")
 
         df = pd.read_excel(
             uploaded_file,
