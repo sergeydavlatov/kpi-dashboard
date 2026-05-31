@@ -17,6 +17,10 @@ SCOPES = [
     "https://www.googleapis.com/auth/drive",
 ]
 
+# How many rows to fetch from the END of the sheet for dedup comparison.
+# 365 days x 20 creators x 4 rows max = 29,200 — use 30,000 to be safe.
+LOOKBACK_ROWS = 30000
+
 # ==========================================
 # GOOGLE AUTH
 # ==========================================
@@ -60,58 +64,46 @@ def normalize_value(value):
 
 
 def hash_row(normalized_tuple):
-    """Create a short hash from a normalized row tuple."""
     row_str = "|".join(normalized_tuple)
     return hashlib.md5(row_str.encode()).hexdigest()
 
 
 def get_existing_hashes(ws):
     """
-    Fetch all rows in batches and return a set of
-    row hashes — avoids 503 on large sheets.
+    Fetch only the last LOOKBACK_ROWS rows from Google Sheet.
+    No need to scan older rows — upload file covers max 365 days.
     """
-    st.write("⏳ Reading existing rows from Google Sheet...")
+    st.write("⏳ Reading recent rows from Google Sheet...")
 
     try:
-        # Fetch in batches of 2000 rows
-        all_values = []
-        batch_size = 2000
-        start_row = 2  # skip header
-        
-        while True:
-            range_notation = f"A{start_row}:U{start_row + batch_size - 1}"
-            try:
-                batch = ws.get(range_notation)
-            except Exception:
-                batch = []
-            
-            if not batch:
-                break
+        total_rows = len(ws.col_values(1))  # Fast — only fetches column A
+        st.write(f"📊 Google Sheet has **{total_rows}** total rows (including header).")
 
-            all_values.extend(batch)
-            st.write(f"  Fetched rows up to {start_row + batch_size - 1}...")
+        if total_rows <= 1:
+            st.write("ℹ️ Sheet is empty — all rows will be added.")
+            return set()
 
-            if len(batch) < batch_size:
-                break
+        # Calculate start row — fetch last LOOKBACK_ROWS rows only
+        start_row = max(2, total_rows - LOOKBACK_ROWS + 1)
+        range_notation = f"A{start_row}:U{total_rows}"
 
-            start_row += batch_size
+        st.write(f"🔍 Fetching rows {start_row} to {total_rows} for comparison...")
+        rows = ws.get(range_notation)
 
     except Exception as e:
         st.error(f"Failed to read Google Sheet: {e}")
         raise
 
-    st.write(f"✅ Loaded **{len(all_values)}** existing rows.")
-
     existing_hashes = set()
-    for row in all_values:
+    for row in rows:
         normalized = tuple(v.strip().lower() for v in row)
         existing_hashes.add(hash_row(normalized))
 
+    st.write(f"✅ Loaded **{len(existing_hashes)}** existing row hashes for comparison.")
     return existing_hashes
 
 
 def build_output_row(row, google_col_count):
-    """Build a row list aligned to Google Sheet columns."""
     output = []
     for i in range(google_col_count):
         value = row.iloc[i] if i < len(row) else ""
@@ -127,7 +119,6 @@ def build_output_row(row, google_col_count):
 
 
 def append_missing_rows(df, ws):
-    """Append only rows not already present, using row hashes."""
     headers = ws.row_values(1)
     st.write(f"📋 Google Sheet columns ({len(headers)}): `{headers}`")
     google_col_count = len(headers)
@@ -150,7 +141,6 @@ def append_missing_rows(df, ws):
     st.write(f"🔎 New rows to add: **{len(rows_to_add)}**")
 
     if rows_to_add:
-        # Push in batches of 500 to avoid payload limits
         batch_size = 500
         total_batches = (len(rows_to_add) + batch_size - 1) // batch_size
 
@@ -170,16 +160,6 @@ def append_missing_rows(df, ws):
         st.write("✅ All batches pushed successfully.")
 
     return len(rows_to_add)
-
-
-def deduplicate_dataframe(df):
-    before = len(df)
-    df = df.drop_duplicates()
-    after = len(df)
-    dropped = before - after
-    if dropped > 0:
-        st.info(f"Removed **{dropped}** fully duplicate rows from the uploaded file.")
-    return df
 
 # ==========================================
 # PROCESS FILE
@@ -205,8 +185,6 @@ if uploaded_file:
         st.write(f"📊 Excel rows: **{len(df)}**, columns: **{len(df.columns)}**")
         st.write("Preview of first 3 rows:")
         st.dataframe(df.head(3))
-
-        df = deduplicate_dataframe(df)
 
         added_count = append_missing_rows(df, worksheet)
 
