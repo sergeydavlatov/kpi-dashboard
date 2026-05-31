@@ -1,6 +1,7 @@
 import streamlit as st
 import pandas as pd
 import gspread
+import hashlib
 from google.oauth2.service_account import Credentials
 
 # ==========================================
@@ -58,29 +59,59 @@ def normalize_value(value):
     return str(value).strip().lower()
 
 
-def get_existing_rows(ws):
+def hash_row(normalized_tuple):
+    """Create a short hash from a normalized row tuple."""
+    row_str = "|".join(normalized_tuple)
+    return hashlib.md5(row_str.encode()).hexdigest()
+
+
+def get_existing_hashes(ws):
+    """
+    Fetch all rows in batches and return a set of
+    row hashes — avoids 503 on large sheets.
+    """
     st.write("⏳ Reading existing rows from Google Sheet...")
+
     try:
-        values = ws.get_all_values()
-        st.write(f"✅ Google Sheet has **{len(values)}** total rows (including header).")
+        # Fetch in batches of 2000 rows
+        all_values = []
+        batch_size = 2000
+        start_row = 2  # skip header
+        
+        while True:
+            range_notation = f"A{start_row}:U{start_row + batch_size - 1}"
+            try:
+                batch = ws.get(range_notation)
+            except Exception:
+                batch = []
+            
+            if not batch:
+                break
+
+            all_values.extend(batch)
+            st.write(f"  Fetched rows up to {start_row + batch_size - 1}...")
+
+            if len(batch) < batch_size:
+                break
+
+            start_row += batch_size
+
     except Exception as e:
         st.error(f"Failed to read Google Sheet: {e}")
         raise
 
-    if len(values) <= 1:
-        st.write("ℹ️ Sheet is empty or has only a header — all rows will be added.")
-        return set()
+    st.write(f"✅ Loaded **{len(all_values)}** existing rows.")
 
-    existing = set()
-    for row in values[1:]:
+    existing_hashes = set()
+    for row in all_values:
         normalized = tuple(v.strip().lower() for v in row)
-        existing.add(normalized)
+        existing_hashes.add(hash_row(normalized))
 
-    st.write(f"✅ Loaded **{len(existing)}** existing unique rows for comparison.")
-    return existing
+    return existing_hashes
 
 
 def build_output_row(row, google_col_count):
+    """Build a row list aligned to Google Sheet columns."""
     output = []
     for i in range(google_col_count):
         value = row.iloc[i] if i < len(row) else ""
@@ -96,35 +127,47 @@ def build_output_row(row, google_col_count):
 
 
 def append_missing_rows(df, ws):
+    """Append only rows not already present, using row hashes."""
     headers = ws.row_values(1)
-    st.write(f"📋 Google Sheet has **{len(headers)}** columns: `{headers}`")
-
+    st.write(f"📋 Google Sheet columns ({len(headers)}): `{headers}`")
     google_col_count = len(headers)
-    existing_rows = get_existing_rows(ws)
+
+    existing_hashes = get_existing_hashes(ws)
 
     rows_to_add = []
 
     for _, row in df.iterrows():
         output_row = build_output_row(row, google_col_count)
         normalized = tuple(normalize_value(v) for v in output_row)
-        if normalized in existing_rows:
-            continue
-        rows_to_add.append(output_row)
-        existing_rows.add(normalized)
+        row_hash = hash_row(normalized)
 
-    st.write(f"🔎 Rows to add: **{len(rows_to_add)}**")
+        if row_hash in existing_hashes:
+            continue
+
+        rows_to_add.append(output_row)
+        existing_hashes.add(row_hash)
+
+    st.write(f"🔎 New rows to add: **{len(rows_to_add)}**")
 
     if rows_to_add:
-        st.write("⏳ Pushing rows to Google Sheet...")
-        try:
-            ws.append_rows(
-                rows_to_add,
-                value_input_option="USER_ENTERED",
-            )
-            st.write("✅ Push complete.")
-        except Exception as e:
-            st.error(f"Failed to push rows: {e}")
-            raise
+        # Push in batches of 500 to avoid payload limits
+        batch_size = 500
+        total_batches = (len(rows_to_add) + batch_size - 1) // batch_size
+
+        for i in range(0, len(rows_to_add), batch_size):
+            batch = rows_to_add[i:i + batch_size]
+            batch_num = (i // batch_size) + 1
+            st.write(f"⏳ Pushing batch {batch_num}/{total_batches} ({len(batch)} rows)...")
+            try:
+                ws.append_rows(
+                    batch,
+                    value_input_option="USER_ENTERED",
+                )
+            except Exception as e:
+                st.error(f"Failed on batch {batch_num}: {e}")
+                raise
+
+        st.write("✅ All batches pushed successfully.")
 
     return len(rows_to_add)
 
@@ -159,7 +202,7 @@ if uploaded_file:
             sheet_name=sheet_names[1],
         )
 
-        st.write(f"📊 Excel rows read: **{len(df)}**, columns: **{len(df.columns)}**")
+        st.write(f"📊 Excel rows: **{len(df)}**, columns: **{len(df.columns)}**")
         st.write("Preview of first 3 rows:")
         st.dataframe(df.head(3))
 
@@ -168,7 +211,7 @@ if uploaded_file:
         added_count = append_missing_rows(df, worksheet)
 
         if added_count > 0:
-            st.success(f"Upload complete. Added **{added_count}** new rows.")
+            st.success(f"✅ Upload complete. Added **{added_count}** new rows.")
         else:
             st.warning("No new rows to add — all data already exists in the sheet.")
 
