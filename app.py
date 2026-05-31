@@ -26,64 +26,195 @@ creds = Credentials.from_service_account_info(
 )
 
 client = gspread.authorize(creds)
-spreadsheet = client.open_by_url(GOOGLE_SHEET_URL)
-worksheet = spreadsheet.worksheet(TARGET_TAB)
+
+spreadsheet = client.open_by_url(
+    GOOGLE_SHEET_URL
+)
+
+worksheet = spreadsheet.worksheet(
+    TARGET_TAB
+)
 
 # ==========================================
 # UI
 # ==========================================
 
-st.title("Google Sheet Duplicate Cleaner")
+st.title("KPI Daily Raw Data Upload")
 
-if st.button("🧹 Clean Duplicates from Google Sheet"):
+uploaded_file = st.file_uploader(
+    "Upload Excel file",
+    type=["xlsx"],
+)
 
-    with st.spinner("Reading all rows from Google Sheet..."):
-        values = worksheet.get_all_values()
+# ==========================================
+# HELPERS
+# ==========================================
+
+def normalize_value(value):
+    """
+    Make values comparable
+    between Excel + Google Sheets.
+    """
+
+    if pd.isna(value):
+        return ""
+
+    # Date / datetime
+    if isinstance(value, pd.Timestamp):
+        return value.strftime("%Y-%m-%d")
+
+    # Numbers
+    if isinstance(value, float):
+        if value.is_integer():
+            return str(int(value))
+        return str(value)
+
+    return str(value).strip()
+
+
+def get_existing_rows(ws):
+    """
+    Read Google Sheet rows
+    excluding header.
+    """
+
+    values = ws.get_all_values()
 
     if len(values) <= 1:
-        st.warning("Sheet is empty or has only a header.")
-        st.stop()
+        return set()
 
-    header = values[0]
-    rows = values[1:]
+    existing = set()
 
-    st.write(f"📊 Total rows before cleaning: **{len(rows)}**")
+    for row in values[1:]:
 
-    # Deduplicate keeping first occurrence, based on Date + Creator (cols 0 and 1)
-    seen = set()
-    unique_rows = []
-    duplicate_count = 0
+        normalized_row = tuple(
+            normalize_value(v)
+            for v in row
+        )
 
-    for row in rows:
-        # Use full row as key to only remove truly identical rows
-        key = tuple(v.strip().lower() for v in row)
-        if key in seen:
-            duplicate_count += 1
+        existing.add(normalized_row)
+
+    return existing
+
+
+def build_output_row(
+    row,
+    google_col_count,
+):
+    """
+    Match Excel columns
+    to Google columns by index.
+    """
+
+    output = []
+
+    for i in range(
+        google_col_count
+    ):
+
+        if i < len(row):
+            value = row.iloc[i]
+        else:
+            value = ""
+
+        if pd.isna(value):
+            value = ""
+
+        output.append(value)
+
+    return output
+
+
+def append_missing_rows(
+    df,
+    ws,
+):
+    """
+    Append only rows
+    not already present.
+    """
+
+    headers = ws.row_values(1)
+
+    google_col_count = len(headers)
+
+    existing_rows = get_existing_rows(
+        ws
+    )
+
+    rows_to_add = []
+
+    for _, row in df.iterrows():
+
+        output_row = build_output_row(
+            row,
+            google_col_count,
+        )
+
+        normalized_row = tuple(
+            normalize_value(v)
+            for v in output_row
+        )
+
+        if normalized_row in existing_rows:
             continue
-        seen.add(key)
-        unique_rows.append(row)
 
-    st.write(f"🗑️ Duplicate rows found: **{duplicate_count}**")
-    st.write(f"✅ Unique rows to keep: **{len(unique_rows)}**")
+        rows_to_add.append(
+            output_row
+        )
 
-    if duplicate_count == 0:
-        st.success("No duplicates found — sheet is already clean!")
-        st.stop()
+        existing_rows.add(
+            normalized_row
+        )
 
-    # Clear sheet and rewrite with deduplicated data
-    with st.spinner("Clearing sheet and rewriting clean data..."):
-        worksheet.clear()
+    if rows_to_add:
+        ws.append_rows(
+            rows_to_add,
+            value_input_option="USER_ENTERED",
+        )
 
-        # Rewrite header + unique rows in batches
-        all_rows = [header] + unique_rows
-        batch_size = 1000
+    return len(rows_to_add)
 
-        for i in range(0, len(all_rows), batch_size):
-            batch = all_rows[i:i + batch_size]
-            worksheet.append_rows(
-                batch,
-                value_input_option="USER_ENTERED",
+# ==========================================
+# PROCESS FILE
+# ==========================================
+
+if uploaded_file:
+
+    try:
+
+        excel = pd.ExcelFile(
+            uploaded_file
+        )
+
+        sheet_names = (
+            excel.sheet_names
+        )
+
+        if len(sheet_names) < 2:
+            st.error(
+                "Excel file must contain at least 2 sheets"
             )
-            st.write(f"  Written {min(i + batch_size, len(all_rows))}/{len(all_rows)} rows...")
+            st.stop()
 
-    st.success(f"✅ Done! Removed **{duplicate_count}** duplicates. Sheet now has **{len(unique_rows)}** data rows.")
+        # Read SECOND Excel tab only
+        df = pd.read_excel(
+            uploaded_file,
+            sheet_name=sheet_names[1],
+        )
+
+        # Append only new rows
+        added_count = append_missing_rows(
+            df,
+            worksheet,
+        )
+
+        st.success(
+            f"Upload complete. Added {added_count} new rows."
+        )
+
+    except Exception as e:
+        st.error(
+            f"Error: {e}"
+        )
+        raise
